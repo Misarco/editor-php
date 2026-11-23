@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor HTML + PHP en vivo</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; background: #1e1e2e; color: #cdd6f4; }
+  header { display: flex; align-items: center; gap: 12px; padding: 8px 14px; background: #181825; border-bottom: 1px solid #313244; }
+  header h1 { font-size: 15px; margin: 0; flex: 1; }
+  #estado { font-size: 12px; color: #f9e2af; }
+  #estado.ok { color: #a6e3a1; }
+  button { background: #89b4fa; color: #11111b; border: 0; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+  main { display: flex; height: calc(100% - 45px); }
+  .panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .panel + .panel { border-left: 1px solid #313244; }
+  .titulo { padding: 5px 12px; font-size: 12px; background: #11111b; color: #9399b2; text-transform: uppercase; letter-spacing: .05em; }
+  textarea { flex: 1; width: 100%; border: 0; outline: 0; resize: none; padding: 14px; background: #1e1e2e; color: #cdd6f4;
+             font: 14px/1.5 "Fira Code", Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; }
+  #sug { display: none; position: absolute; left: 14px; bottom: 14px; background: #313244; color: #cdd6f4; padding: 8px 12px;
+         border-radius: 6px; border: 1px solid #89b4fa; font: 13px monospace; cursor: pointer; box-shadow: 0 4px 12px #0008; }
+  #sug small { color: #9399b2; margin-left: 10px; }
+  iframe { flex: 1; width: 100%; border: 0; background: #fff; }
+  @media (max-width: 800px) { main { flex-direction: column; } .panel + .panel { border-left: 0; border-top: 1px solid #313244; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Editor HTML + PHP en vivo</h1>
+  <span id="estado">cargando PHP…</span>
+  <button id="reset">Ejemplo</button>
+</header>
+<main>
+  <section class="panel">
+    <div class="titulo">Código (HTML + PHP)</div>
+    <div style="position:relative;flex:1;display:flex;min-height:0">
+      <textarea id="codigo" spellcheck="false"></textarea>
+      <div id="sug"><b>html5</b> &rarr; plantilla HTML <small>Tab / Enter</small></div>
+    </div>
+  </section>
+  <section class="panel">
+    <div class="titulo">Resultado</div>
+    <iframe id="vista" sandbox></iframe>
+  </section>
+</main>
+
+<script type="module">
+import { PhpWeb } from 'https://cdn.jsdelivr.net/npm/php-wasm/PhpWeb.mjs';
+
+const EJEMPLO = `<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: sans-serif; padding: 20px; }
+    li { margin: 4px 0; }
+    .ok { color: green; }
+  </style>
+</head>
+<body>
+  <h1>Hola desde PHP</h1>
+
+  <?php
+    $juegos = [
+      "Zelda"  => 2017,
+      "Mario"  => 2023,
+      "Tetris" => 1984,
+    ];
+    echo "<p>Hoy es " . date("d/m/Y H:i:s") . "</p>";
+  ?>
+
+  <ul>
+    <?php foreach ($juegos as $nombre => $anio): ?>
+      <li><b><?= $nombre ?></b> (<?= $anio ?>)</li>
+    <?php endforeach; ?>
+  </ul>
+
+  <p class="ok">Edita el código y esto cambia solo.</p>
+</body>
+</html>`;
+
+const codigo = document.getElementById('codigo');
+const vista  = document.getElementById('vista');
+const estado = document.getElementById('estado');
+let guardado = null;
+try { guardado = localStorage.getItem('editor-php-codigo'); } catch (e) {}
+codigo.value = guardado || EJEMPLO;
+
+let salida = '';
+const php = new PhpWeb();
+php.addEventListener('output', e => { salida += (e.detail || []).join(''); });
+php.addEventListener('error',  e => { salida += (e.detail || []).join(''); });
+
+const PREFIJO = "<?php ini_set('display_errors','1'); error_reporting(E_ALL); ini_set('html_errors','0'); ?>";
+let ocupado = false, pendiente = false;
+
+async function ejecutar() {
+  if (ocupado) { pendiente = true; return; }
+  ocupado = true;
+  estado.className = ''; estado.textContent = 'ejecutando…';
+  do {
+    pendiente = false;
+    salida = '';
+    try { await php.run(PREFIJO + codigo.value); }
+    catch (err) { salida += '<pre style="color:#900">' + String(err) + '</pre>'; }
+    vista.srcdoc = salida;
+  } while (pendiente);
+  ocupado = false;
+  estado.className = 'ok';
+  estado.textContent = 'actualizado ' + new Date().toLocaleTimeString();
+  try { localStorage.setItem('editor-php-codigo', codigo.value); } catch (e) {}
+}
+
+// --- Autocompletado: escribe "html5" y pulsa Tab o Enter ---
+const PLANTILLA = '<!DOCTYPE html>\n<html>\n<head>\n  \n</head>\n<body>\n  \n</body>\n</html>';
+const sug = document.getElementById('sug');
+const haySugerencia = () => /(^|\s)html5$/.test(codigo.value.slice(0, codigo.selectionStart));
+function aceptarSugerencia() {
+  const fin = codigo.selectionStart, ini = fin - 5;
+  codigo.setRangeText(PLANTILLA, ini, fin, 'end');
+  const pos = ini + PLANTILLA.indexOf('<body>\n  ') + '<body>\n  '.length;
+  codigo.setSelectionRange(pos, pos);
+  sug.style.display = 'none';
+  codigo.dispatchEvent(new Event('input'));
+}
+sug.addEventListener('mousedown', e => { e.preventDefault(); aceptarSugerencia(); codigo.focus(); });
+
+let t;
+codigo.addEventListener('input', () => {
+  sug.style.display = haySugerencia() ? 'block' : 'none';
+  clearTimeout(t); t = setTimeout(ejecutar, 250);
+});
+codigo.addEventListener('click', () => { sug.style.display = haySugerencia() ? 'block' : 'none'; });
+codigo.addEventListener('keydown', e => {
+  if (sug.style.display === 'block') {
+    if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); aceptarSugerencia(); return; }
+    if (e.key === 'Escape') { sug.style.display = 'none'; return; }
+  }
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    codigo.setRangeText('  ', codigo.selectionStart, codigo.selectionEnd, 'end');
+    codigo.dispatchEvent(new Event('input'));
+  }
+});
+document.getElementById('reset').onclick = () => { codigo.value = EJEMPLO; ejecutar(); };
+
+php.addEventListener('ready', ejecutar);
+</script>
+</body>
+</html>
