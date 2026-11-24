@@ -18,9 +18,12 @@
   .titulo { padding: 5px 12px; font-size: 12px; background: #11111b; color: #9399b2; text-transform: uppercase; letter-spacing: .05em; }
   textarea { flex: 1; width: 100%; border: 0; outline: 0; resize: none; padding: 14px; background: #1e1e2e; color: #cdd6f4;
              font: 14px/1.5 "Fira Code", Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; }
-  #sug { display: none; position: absolute; left: 14px; bottom: 14px; background: #313244; color: #cdd6f4; padding: 8px 12px;
-         border-radius: 6px; border: 1px solid #89b4fa; font: 13px monospace; cursor: pointer; box-shadow: 0 4px 12px #0008; }
-  #sug small { color: #9399b2; margin-left: 10px; }
+  #sug { display: none; position: absolute; z-index: 10; min-width: 260px; max-height: 220px; overflow-y: auto; background: #313244;
+         border: 1px solid #89b4fa; border-radius: 6px; box-shadow: 0 6px 18px #000a; font: 13px monospace; }
+  #sug div { padding: 4px 10px; cursor: pointer; display: flex; gap: 14px; justify-content: space-between; }
+  #sug div small { color: #9399b2; }
+  #sug div.sel { background: #89b4fa; color: #11111b; }
+  #sug div.sel small { color: #313244; }
   iframe { flex: 1; width: 100%; border: 0; background: #fff; }
   @media (max-width: 800px) { main { flex-direction: column; } .panel + .panel { border-left: 0; border-top: 1px solid #313244; } }
 </style>
@@ -36,7 +39,7 @@
     <div class="titulo">Código (HTML + PHP)</div>
     <div style="position:relative;flex:1;display:flex;min-height:0">
       <textarea id="codigo" spellcheck="false"></textarea>
-      <div id="sug"><b>html5</b> &rarr; plantilla HTML <small>Tab / Enter</small></div>
+      <div id="sug"></div>
     </div>
   </section>
   <section class="panel">
@@ -112,28 +115,117 @@ async function ejecutar() {
   try { localStorage.setItem('editor-php-codigo', codigo.value); } catch (e) {}
 }
 
-// --- Autocompletado: escribe "html5" y pulsa Tab o Enter ---
-const PLANTILLA = '<!DOCTYPE html>\n<html>\n<head>\n  \n</head>\n<body>\n  \n</body>\n</html>';
+// --- Autocompletado de funciones y plantillas (escribe 2 letras: st, su, fo, ht...) ---
+// El símbolo | marca dónde queda el cursor al completar.
+const SUGERENCIAS = [
+  ['html5',       '<!DOCTYPE html>\n<html>\n<head>\n  \n</head>\n<body>\n  |\n</body>\n</html>', 'plantilla HTML'],
+  ['php',         '<?php\n|\n?>',                         'bloque PHP'],
+  ['foreach',     'foreach ($| as $clave => $valor) {\n  \n}', 'recorrer array'],
+  ['if',          'if (|) {\n  \n}',                      'condición'],
+  ['else',        'else {\n  |\n}',                       'si no'],
+  ['echo',        'echo |;',                              'imprimir'],
+  ['strtoupper',  'strtoupper(|)',                        'a MAYÚSCULAS'],
+  ['strtolower',  'strtolower(|)',                        'a minúsculas'],
+  ['strlen',      'strlen(|)',                            'longitud'],
+  ['substr',      'substr(|, 0, 5)',                      'trozo de texto'],
+  ['stripos',     'stripos(|, "")',                       'posición (sin may/min)'],
+  ['strpos',      'strpos(|, "")',                        'posición'],
+  ['str_replace', 'str_replace("", "", |)',               'reemplazar'],
+  ['str_contains','str_contains(|, "")',                  'contiene (true/false)'],
+  ['ucfirst',     'ucfirst(|)',                           'primera en mayúscula'],
+  ['trim',        'trim(|)',                              'quitar espacios'],
+  ['count',       'count(|)',                             'nº de elementos'],
+  ['array_sum',   'array_sum(|)',                         'suma del array'],
+  ['array_keys',  'array_keys(|)',                        'claves del array'],
+  ['array_values','array_values(|)',                      'valores del array'],
+  ['array_column','array_column(|, "")',                  'columna de un array'],
+  ['array_push',  'array_push(|, )',                      'añadir al array'],
+  ['in_array',    'in_array(|, )',                        'está en el array'],
+  ['isset',       'isset(|)',                             'existe la variable'],
+  ['max',         'max(|)',                               'máximo'],
+  ['min',         'min(|)',                               'mínimo'],
+  ['round',       'round(|, 2)',                          'redondear'],
+  ['number_format','number_format(|, 2, ",", ".")',       'formato de número'],
+  ['implode',     'implode(", ", |)',                     'array a texto'],
+  ['explode',     'explode(",", |)',                      'texto a array'],
+  ['sort',        'sort(|)',                              'ordenar'],
+  ['print_r',     'print_r(|)',                           'mostrar array'],
+  ['var_dump',    'var_dump(|)',                          'mostrar valor y tipo'],
+  ['date',        'date("d/m/Y|")',                       'fecha'],
+];
 const sug = document.getElementById('sug');
-const haySugerencia = () => /(^|\s)html5$/.test(codigo.value.slice(0, codigo.selectionStart));
+let lista = [], sel = 0, palabra = '';
+
+function palabraActual() {
+  const antes = codigo.value.slice(0, codigo.selectionStart);
+  const m = antes.match(/[A-Za-z_][A-Za-z0-9_]*$/);
+  if (!m || m[0].length < 2) return '';
+  if (antes.charAt(antes.length - m[0].length - 1) === '$') return '';   // es una variable
+  return m[0];
+}
+
+// Coordenadas del cursor dentro del textarea
+function coordsCursor() {
+  const cs = getComputedStyle(codigo), d = document.createElement('div');
+  ['fontFamily','fontSize','lineHeight','padding','tabSize','letterSpacing'].forEach(k => d.style[k] = cs[k]);
+  d.style.cssText += ';position:absolute;visibility:hidden;white-space:pre;top:0;left:0';
+  d.textContent = codigo.value.slice(0, codigo.selectionStart);
+  const marca = document.createElement('span'); marca.textContent = '.'; d.appendChild(marca);
+  codigo.parentNode.appendChild(d);
+  const r = { x: marca.offsetLeft - codigo.scrollLeft, y: marca.offsetTop - codigo.scrollTop, h: parseFloat(cs.lineHeight) || 21 };
+  d.remove();
+  return r;
+}
+
+function pintar() {
+  sug.innerHTML = '';
+  lista.forEach((it, i) => {
+    const el = document.createElement('div');
+    if (i === sel) el.className = 'sel';
+    el.innerHTML = '<b></b><small></small>';
+    el.firstChild.textContent = it[0]; el.lastChild.textContent = it[2];
+    el.addEventListener('mousedown', e => { e.preventDefault(); sel = i; aceptarSugerencia(); codigo.focus(); });
+    sug.appendChild(el);
+  });
+  const sk = sug.querySelector('.sel'); if (sk) sk.scrollIntoView({ block: 'nearest' });
+}
+
+function actualizarSugerencias() {
+  palabra = palabraActual();
+  lista = palabra ? SUGERENCIAS.filter(s => s[0].toLowerCase().startsWith(palabra.toLowerCase())) : [];
+  if (!lista.length) { sug.style.display = 'none'; return; }
+  sel = 0; pintar();
+  const c = coordsCursor();
+  sug.style.display = 'block';
+  const maxX = codigo.clientWidth - sug.offsetWidth - 4;
+  sug.style.left = Math.max(4, Math.min(c.x, maxX)) + 'px';
+  const abajo = c.y + c.h + 2;
+  sug.style.top = (abajo + sug.offsetHeight > codigo.clientHeight ? Math.max(4, c.y - sug.offsetHeight - 2) : abajo) + 'px';
+}
+
 function aceptarSugerencia() {
-  const fin = codigo.selectionStart, ini = fin - 5;
-  codigo.setRangeText(PLANTILLA, ini, fin, 'end');
-  const pos = ini + PLANTILLA.indexOf('<body>\n  ') + '<body>\n  '.length;
+  const it = lista[sel]; if (!it) return;
+  const fin = codigo.selectionStart, ini = fin - palabra.length;
+  const plantilla = it[1], k = plantilla.indexOf('|');
+  codigo.setRangeText(plantilla.replace('|', ''), ini, fin, 'end');
+  const pos = ini + (k < 0 ? plantilla.length : k);
   codigo.setSelectionRange(pos, pos);
   sug.style.display = 'none';
   codigo.dispatchEvent(new Event('input'));
 }
-sug.addEventListener('mousedown', e => { e.preventDefault(); aceptarSugerencia(); codigo.focus(); });
 
 let t;
 codigo.addEventListener('input', () => {
-  sug.style.display = haySugerencia() ? 'block' : 'none';
+  actualizarSugerencias();
   clearTimeout(t); t = setTimeout(ejecutar, 250);
 });
-codigo.addEventListener('click', () => { sug.style.display = haySugerencia() ? 'block' : 'none'; });
+codigo.addEventListener('click', () => { sug.style.display = 'none'; });
+codigo.addEventListener('blur',  () => { setTimeout(() => sug.style.display = 'none', 120); });
+codigo.addEventListener('scroll', () => { sug.style.display = 'none'; });
 codigo.addEventListener('keydown', e => {
   if (sug.style.display === 'block') {
+    if (e.key === 'ArrowDown') { e.preventDefault(); sel = (sel + 1) % lista.length; pintar(); return; }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); sel = (sel - 1 + lista.length) % lista.length; pintar(); return; }
     if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); aceptarSugerencia(); return; }
     if (e.key === 'Escape') { sug.style.display = 'none'; return; }
   }
